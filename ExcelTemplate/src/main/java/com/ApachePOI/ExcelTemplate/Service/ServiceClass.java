@@ -1,5 +1,6 @@
 package com.ApachePOI.ExcelTemplate.Service;
 
+import com.ApachePOI.ExcelTemplate.Entity.CellError;
 import com.ApachePOI.ExcelTemplate.Entity.Employee;
 import com.ApachePOI.ExcelTemplate.Repository.EmployeeRepo;
 import jakarta.servlet.http.HttpServletResponse;
@@ -8,9 +9,12 @@ import org.apache.poi.ss.util.CellRangeAddressList;
 import org.apache.poi.xssf.usermodel.XSSFWorkbook;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
+
+import java.io.ByteArrayInputStream;
+import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
-import java.util.LinkedList;
+import java.util.ArrayList;
 import java.util.List;
 
 @Service
@@ -20,6 +24,11 @@ public class ServiceClass {
     EmployeeRepo employeeRepo;
 
     private static final int ROW_LIMIT = 7;
+    private static final String[] headers = {"ID", "Name", "Age", "Salary", "DOB"};
+    private static final String[] EXPECTED_HEADERS = {"ID", "Name", "Age", "Salary", "DOB"};
+
+    private List<CellError> validationErrors;
+    private List<Employee> validEmployees;
 
     public void downloadFile(HttpServletResponse response) throws IOException {
 
@@ -47,7 +56,6 @@ public class ServiceClass {
 
         //4. Create header Row
         Row headerRow = sheet.createRow(0);
-        String[] headers = {"ID", "Name", "Age", "Salary", "Department", "DOB"};
         int columnCount = 0;
         for(String header : headers) {
             Cell cell = headerRow.createCell(columnCount++);
@@ -60,27 +68,35 @@ public class ServiceClass {
         DataValidationHelper validationHelper = sheet.getDataValidationHelper();
 
         //1. Column 0/A
-        CellRangeAddressList patternRegion = new CellRangeAddressList(1, ROW_LIMIT, 0, 0);  // Select Column
-        String pattern = "ISNUMBER(MATCH(\"???####\", A" + 0 + ", 0))";
-        DataValidationConstraint idConstraint = validationHelper.createCustomConstraint(  // Select type
-                pattern
+        CellRangeAddressList numericRegion = new CellRangeAddressList(1, ROW_LIMIT, 0, 0);  // Select Column
+
+        DataValidationConstraint idConstraint = validationHelper.createNumericConstraint(  // Select contraint type
+                DataValidationConstraint.ValidationType.INTEGER,
+                DataValidationConstraint.OperatorType.BETWEEN,
+                "100",
+                "150"
         );
 
-        DataValidation idValidation = validationHelper.createValidation(idConstraint, patternRegion);  // Set Validation
+        DataValidation idValidation = validationHelper.createValidation(idConstraint, numericRegion);  // Set Validation
 
         // Error Handling
         idValidation.setShowErrorBox(true);
         idValidation.setErrorStyle(DataValidation.ErrorStyle.STOP);
-        idValidation.createErrorBox("Wrong ID", "ID must follow the pattern");
+        idValidation.createErrorBox("Wrong ID", "ID must be a number");
 
         sheet.addValidationData(idValidation);
 
         //2. Column 1/B
+
+        String cellRef = "B2";
+        String noDigitsFormula = "SUMPRODUCT(ISNUMBER(MID(" + cellRef + ", ROW(INDIRECT(\"1:\"&LEN(" + cellRef + "))), 1)*1)*1)=0";
+        String specialChars = "{\"!\", \"@\", \"#\", \"$\", \"%\", \"^\", \"&\", \"*\", \"(\", \")\", \"-\", \"+\", \"=\", \"\"\"\", \";\", \":\", \"<\", \">\", \",\", \".\", \"/\", \"\\\\\", \"|\", \" \"}";
+        String noSpecialCharsFormula = "SUMPRODUCT(--ISERROR(FIND(" + specialChars + ", " + cellRef + ")))=24";
+        String finalFormula = "AND(" + noDigitsFormula + ", " + noSpecialCharsFormula + ", LEN(" + cellRef + ")>=2, LEN(" + cellRef + ")<=30)";
+
         CellRangeAddressList stringRegion1 = new CellRangeAddressList(1, ROW_LIMIT, 1, 1);  // Select Column
-        DataValidationConstraint nameConstraint = validationHelper.createTextLengthConstraint(  // Select type
-                DataValidationConstraint.OperatorType.BETWEEN,
-                "2",
-                "30"
+        DataValidationConstraint nameConstraint = validationHelper.createCustomConstraint(  // Select type
+                finalFormula
         );
 
         DataValidation nameValidation = validationHelper.createValidation(nameConstraint, stringRegion1);  // Set Validation
@@ -127,29 +143,12 @@ public class ServiceClass {
         sheet.addValidationData(salaryValidation);
 
         //Column 4/E
-        CellRangeAddressList stringRegion2 = new CellRangeAddressList(1, ROW_LIMIT, 4, 4);
-        DataValidationConstraint departmentConstraint = validationHelper.createTextLengthConstraint(  // Select type
-                DataValidationConstraint.OperatorType.BETWEEN,
-                "2",
-                "30"
-        );
-
-        DataValidation departmentValidation = validationHelper.createValidation(departmentConstraint, stringRegion2);  // Set Validation
-
-        //Error Handling
-        departmentValidation.setShowErrorBox(true);
-        departmentValidation.setErrorStyle(DataValidation.ErrorStyle.STOP);
-        departmentValidation.createErrorBox("Wrong department", "Department must be a string");
-
-        sheet.addValidationData(departmentValidation);
-
-        //Column 5/F
-        CellRangeAddressList dateRegion = new CellRangeAddressList(1, ROW_LIMIT, 5, 5);
+        CellRangeAddressList dateRegion = new CellRangeAddressList(1, ROW_LIMIT, 4, 4);
         DataValidationConstraint dobConstraint = validationHelper.createDateConstraint(
-                DataValidationConstraint.OperatorType.BETWEEN,
+                DataValidationConstraint.OperatorType.GREATER_OR_EQUAL,
                 "2025/01/01",
-                "2025/10/30",
-                "DATE"
+                "DATE",
+                null
         );
 
         DataValidation dobValidation = validationHelper.createValidation(dobConstraint, dateRegion);
@@ -164,54 +163,203 @@ public class ServiceClass {
         workbook.close();
     }
 
+//    public void uploadFile(InputStream file) throws IOException {
+//
+//        List<Employee> employees = new ArrayList<Employee>();
+//        final String[] EXPECTED_HEADERS = {"ID", "Name", "age", "salary", "DOB"};
+//
+//        try (Workbook workbook = WorkbookFactory.create(file)) {
+//            Sheet sheet = workbook.getSheetAt(0);
+//
+//            //Save excel data in database
+//            if(validateHeaders(file) && validateData(file)) {
+//                sheet.forEach(row -> {
+//
+//                });
+//            } else {
+//                generateErrorFile(file);
+//            }
+//            employeeRepo.saveAll(employees);
+//        }
+//    }
+
     public void uploadFile(InputStream file) throws IOException {
-        List<Employee> employees = new LinkedList<>();
+
+        ByteArrayOutputStream baos = new ByteArrayOutputStream();
+        file.transferTo(baos);
+        byte[] fileBytes = baos.toByteArray();
+
+        boolean dataIsValid = validateData(new ByteArrayInputStream(fileBytes));
+        boolean headersAreValid = validateHeaders(new ByteArrayInputStream(fileBytes));
+
+        if(dataIsValid && headersAreValid) {
+            employeeRepo.saveAll(validEmployees);
+        } else {
+            generateErrorFile(new ByteArrayInputStream(fileBytes));
+        }
+    }
+
+    public boolean validateHeaders(InputStream file) throws IOException {
+
+        boolean flag = true;
 
         try (Workbook workbook = WorkbookFactory.create(file)) {
             Sheet sheet = workbook.getSheetAt(0);
 
-            sheet.forEach(row -> {
-                Employee employee = new Employee();
+            //Header Validation
+            Row headerRow = sheet.getRow(0);
+            if (headerRow == null) {
+                throw new IOException("Uploaded sheet is empty");
+            }
+            for (int i = 0; i < EXPECTED_HEADERS.length; i++) {
+                Cell headerCell = headerRow.getCell(i);
 
-                if (row.getRowNum() != 0) {
+                if (headerCell == null ||
+                        headerCell.getCellType() != CellType.STRING ||
+                        !headerCell.getStringCellValue().trim().equalsIgnoreCase(EXPECTED_HEADERS[i])) {
 
-                    Cell idcell = row.getCell(0);
-                    Cell namecell = row.getCell(1);
-                    Cell agecell = row.getCell(2);
-                    Cell salarycell = row.getCell(3);
+                    String actualHeader = (headerCell == null) ? "BLANK/MISSING" : headerCell.getStringCellValue();
+                    flag = false;
+                    throw new IllegalArgumentException(
+                            "Header mismatch! Expected '" + EXPECTED_HEADERS[i] +
+                                    "' at column " + (i + 1) + ", but found '" + actualHeader + "'. Please use the correct template.");
 
-                    if(idcell != null && idcell.getCellType() == CellType.STRING) {
-                        employee.setId(row.getCell(0).getStringCellValue());
-                    } else if(namecell != null && namecell.getCellType() == CellType.BLANK) {
-                        System.out.println("Problem in ID: ID is Empty");
-                    } else {
-                        System.out.println("Problem in ID: ID Does not match the standard pattern");
-                    }
-                    if(namecell != null && namecell.getCellType() == CellType.STRING) {
-                        employee.setName(row.getCell(1).getStringCellValue());
-                    } else {
-                        System.out.println("Problem in Name");
-                    }
-                    if(agecell != null && agecell.getCellType() == CellType.NUMERIC) {
-                        employee.setAge((int) row.getCell(2).getNumericCellValue());
-                    } else {
-                        System.out.println("Problem in Age");
-                    }
-                    if(salarycell != null && salarycell.getCellType() == CellType.NUMERIC) {
-                        employee.setSalary(row.getCell(3).getNumericCellValue());
-                    } else {
-                        System.out.println("Problem in Salary");
-                    }
-
-                    employees.add(employee);
                 }
-            });
-            employeeRepo.saveAll(employees);
+            }
+            System.out.println("Headers Validated Successfully");
+        } catch (IOException e) {
+            throw new RuntimeException(e);
         }
+        return flag;
     }
 
+    public boolean validateData(InputStream file) throws IOException {
+        this.validationErrors = new ArrayList();
+        this.validEmployees = new ArrayList<>();
+
+        try (Workbook workbook = WorkbookFactory.create(file)) {
+            Sheet sheet = workbook.getSheetAt(0);
+            sheet.forEach(row -> {
+                if(row.getRowNum() == 0) {
+                    return;
+                }
+                Employee employee = new Employee();
+                boolean rowIsValid = true;
+                int rowIndex = row.getRowNum();
+
+                //ID Validation
+                Cell idcell = row.getCell(0);
+                if(idcell != null && idcell.getCellType() != CellType.NUMERIC) {
+                    employee.setId((int) idcell.getNumericCellValue());
+                } else {
+                    String errorMsg = (idcell == null || idcell.getCellType() == CellType.BLANK) ? "ID is Empty": "ID must be a number";
+                    validationErrors.add(new CellError(rowIndex, 0, errorMsg));
+                    rowIsValid = false;
+                }
+
+                //Name Validation
+                Cell namecell = row.getCell(1);
+                if(namecell != null && namecell.getCellType() == CellType.FORMULA) {
+                    employee.setName(namecell.getStringCellValue());
+                } else {
+                    validationErrors.add(new CellError(rowIndex, 1, "Name must be String"));
+                    rowIsValid = false;
+                }
+
+                //Age Validation
+                Cell agecell = row.getCell(2);
+                if(agecell != null && agecell.getCellType() == CellType.NUMERIC) {
+                    employee.setAge((int) agecell.getNumericCellValue());
+                } else {
+                    validationErrors.add(new CellError(rowIndex, 2, "Age must be a number"));
+                    rowIsValid = false;
+                }
+
+                //Salary Validation
+                Cell salarycell = row.getCell(3);
+                if(salarycell != null && salarycell.getCellType() == CellType.NUMERIC) {
+                    employee.setSalary(salarycell.getNumericCellValue());
+                } else {
+                    validationErrors.add(new CellError(rowIndex, 3, "Salary must be a number"));
+                    rowIsValid = false;
+                }
+
+                //DOB Validation
+                Cell dobcell = row.getCell(4);
+                if(dobcell != null && dobcell.getCellType() == CellType.NUMERIC) {
+                    employee.setDOB(dobcell.getDateCellValue());
+                } else {
+                    validationErrors.add(new CellError(rowIndex, 4, "DOB must be a valid date format."));
+                    rowIsValid = false;
+                }
+
+                // Add to valid list if the whole row passed
+                if (rowIsValid) {
+                    validEmployees.add(employee);
+                }
+
+            });
+        }
+        // Return true if the error list is empty
+        return validationErrors.isEmpty();
+    }
+
+//    public Workbook generateErrorFile(InputStream file) throws IOException {
+    public void generateErrorFile(InputStream file) throws IOException {
+
+        // 1. Re-read the original file uploaded by the user
+        Workbook errorWorkbook;
+
+        try {
+            errorWorkbook = WorkbookFactory.create(file);
+
+        } catch (Exception e) {
+
+            // Fallback if file is corrupted, create an empty workbook
+            errorWorkbook = new XSSFWorkbook();
+            Sheet errorSheet = errorWorkbook.createSheet("Error Report");
+            Row headerRow = errorSheet.createRow(0);
+            for(int i = 0; i < EXPECTED_HEADERS.length; i++) {
+                headerRow.createCell(i).setCellValue(EXPECTED_HEADERS[i]);
+            }
+//            return errorWorkbook;
+        }
+
+        Sheet errorSheet = errorWorkbook.getSheetAt(0);
+        Drawing<?> drawing = errorSheet.createDrawingPatriarch();
+
+        // 2. Define Cell Styles for Errors (Red Highlight)
+        CellStyle errorStyle = errorWorkbook.createCellStyle();
+        errorStyle.setFillForegroundColor(IndexedColors.RED.getIndex());
+        errorStyle.setFillPattern(FillPatternType.SOLID_FOREGROUND);
+
+        // 3. Apply Errors to the Sheet
+        for (CellError error : validationErrors) {
+            Row row = errorSheet.getRow(error.rowIndex);
+            if (row == null) continue;
+
+            Cell cell = row.getCell(error.columnIndex);
+            if (cell == null) {
+                cell = row.createCell(error.columnIndex); // Create if null
+            }
+
+            // a. Apply the Red Highlight
+            cell.setCellStyle(errorStyle);
+
+            // b. Add Comments
+            // Create a comment box that spans from column C to D, row 2 to 3
+            ClientAnchor anchor = drawing.createAnchor(0, 0, 0, 0, error.columnIndex + 1, error.rowIndex, error.columnIndex + 3, error.rowIndex + 4);
+            Comment comment = drawing.createCellComment(anchor);
+            comment.setString(errorWorkbook.getCreationHelper().createRichTextString("ERROR: " + error.errorMessage));
+            comment.setAuthor("Data Validator");
+            cell.setCellComment(comment);
+        }
+
+//        return errorWorkbook;
+    }
 
     public List<Employee> findAll() {
         return employeeRepo.findAll();
     }
+
 }

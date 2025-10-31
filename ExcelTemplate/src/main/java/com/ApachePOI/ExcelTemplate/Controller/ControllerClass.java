@@ -31,7 +31,7 @@ public class ControllerClass {
             throw new IllegalArgumentException("Uploaded file is empty or missing!");
         }
         service.uploadFile(file.getInputStream());
-        return ResponseEntity.ok("Excel file data uploaded into database");
+        return ResponseEntity.ok("Excel file data uploaded in database.");
     }
 
     @GetMapping("/read-data")
