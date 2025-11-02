@@ -2,13 +2,18 @@ package com.ApachePOI.ExcelTemplate.Service;
 
 import com.ApachePOI.ExcelTemplate.Entity.CellError;
 import com.ApachePOI.ExcelTemplate.Entity.Employee;
+import com.ApachePOI.ExcelTemplate.Entity.ValidationFailedException;
 import com.ApachePOI.ExcelTemplate.Repository.EmployeeRepo;
 import jakarta.servlet.http.HttpServletResponse;
 import org.apache.poi.ss.usermodel.*;
 import org.apache.poi.ss.util.CellRangeAddressList;
 import org.apache.poi.xssf.usermodel.XSSFWorkbook;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.http.HttpStatus;
+import org.springframework.http.MediaType;
+import org.springframework.http.ResponseEntity;
 import org.springframework.stereotype.Service;
+import org.springframework.web.multipart.MultipartFile;
 
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
@@ -27,8 +32,6 @@ public class ServiceClass {
     private static final String[] headers = {"ID", "Name", "Age", "Salary", "DOB"};
     private static final String[] EXPECTED_HEADERS = {"ID", "Name", "Age", "Salary", "DOB"};
 
-    private List<CellError> validationErrors;
-    private List<Employee> validEmployees;
 
     public void downloadFile(HttpServletResponse response) throws IOException {
 
@@ -163,54 +166,17 @@ public class ServiceClass {
         workbook.close();
     }
 
-//    public void uploadFile(InputStream file) throws IOException {
-//
-//        List<Employee> employees = new ArrayList<Employee>();
-//        final String[] EXPECTED_HEADERS = {"ID", "Name", "age", "salary", "DOB"};
-//
-//        try (Workbook workbook = WorkbookFactory.create(file)) {
-//            Sheet sheet = workbook.getSheetAt(0);
-//
-//            //Save excel data in database
-//            if(validateHeaders(file) && validateData(file)) {
-//                sheet.forEach(row -> {
-//
-//                });
-//            } else {
-//                generateErrorFile(file);
-//            }
-//            employeeRepo.saveAll(employees);
-//        }
-//    }
-
-    public void uploadFile(InputStream file) throws IOException {
-
-        ByteArrayOutputStream baos = new ByteArrayOutputStream();
-        file.transferTo(baos);
-        byte[] fileBytes = baos.toByteArray();
-
-        boolean dataIsValid = validateData(new ByteArrayInputStream(fileBytes));
-        boolean headersAreValid = validateHeaders(new ByteArrayInputStream(fileBytes));
-
-        if(dataIsValid && headersAreValid) {
-            employeeRepo.saveAll(validEmployees);
-        } else {
-            generateErrorFile(new ByteArrayInputStream(fileBytes));
-        }
-    }
-
-    public boolean validateHeaders(InputStream file) throws IOException {
-
-        boolean flag = true;
+    public List<CellError> validateHeaders(InputStream file) throws IOException {
+        List<CellError> headerErrors = new ArrayList<>();
 
         try (Workbook workbook = WorkbookFactory.create(file)) {
             Sheet sheet = workbook.getSheetAt(0);
 
-            //Header Validation
             Row headerRow = sheet.getRow(0);
             if (headerRow == null) {
-                throw new IOException("Uploaded sheet is empty");
+                throw new IOException("Uploaded sheet is empty or header row is missing.");
             }
+
             for (int i = 0; i < EXPECTED_HEADERS.length; i++) {
                 Cell headerCell = headerRow.getCell(i);
 
@@ -219,23 +185,16 @@ public class ServiceClass {
                         !headerCell.getStringCellValue().trim().equalsIgnoreCase(EXPECTED_HEADERS[i])) {
 
                     String actualHeader = (headerCell == null) ? "BLANK/MISSING" : headerCell.getStringCellValue();
-                    flag = false;
-                    throw new IllegalArgumentException(
-                            "Header mismatch! Expected '" + EXPECTED_HEADERS[i] +
-                                    "' at column " + (i + 1) + ", but found '" + actualHeader + "'. Please use the correct template.");
-
+                    String errorMessage = "Header Mismatch. Expected: " + EXPECTED_HEADERS[i] + ", Found: " + actualHeader;
+                    headerErrors.add(new CellError(0, i, errorMessage));
                 }
             }
-            System.out.println("Headers Validated Successfully");
-        } catch (IOException e) {
-            throw new RuntimeException(e);
         }
-        return flag;
+        return headerErrors;
     }
 
-    public boolean validateData(InputStream file) throws IOException {
-        this.validationErrors = new ArrayList();
-        this.validEmployees = new ArrayList<>();
+    public List<CellError> validateData(InputStream file, List<Employee> validEmployees) throws IOException {
+        List<CellError> validationErrors = new ArrayList();
 
         try (Workbook workbook = WorkbookFactory.create(file)) {
             Sheet sheet = workbook.getSheetAt(0);
@@ -249,20 +208,21 @@ public class ServiceClass {
 
                 //ID Validation
                 Cell idcell = row.getCell(0);
-                if(idcell != null && idcell.getCellType() != CellType.NUMERIC) {
+                if(idcell != null && idcell.getCellType() == CellType.NUMERIC) {
                     employee.setId((int) idcell.getNumericCellValue());
                 } else {
-                    String errorMsg = (idcell == null || idcell.getCellType() == CellType.BLANK) ? "ID is Empty": "ID must be a number";
-                    validationErrors.add(new CellError(rowIndex, 0, errorMsg));
+                    String errorMsgId = (idcell == null || idcell.getCellType() == CellType.BLANK) ? "ID is Empty": "ID must be a number";
+                    validationErrors.add(new CellError(rowIndex, 0, errorMsgId));
                     rowIsValid = false;
                 }
 
                 //Name Validation
                 Cell namecell = row.getCell(1);
-                if(namecell != null && namecell.getCellType() == CellType.FORMULA) {
+                if(namecell != null && namecell.getCellType() == CellType.STRING) {
                     employee.setName(namecell.getStringCellValue());
                 } else {
-                    validationErrors.add(new CellError(rowIndex, 1, "Name must be String"));
+                    String errorMsgName = (namecell == null || namecell.getCellType() == CellType.BLANK) ? "Name is Empty": "Name must be a character String";
+                    validationErrors.add(new CellError(rowIndex, 1, errorMsgName));
                     rowIsValid = false;
                 }
 
@@ -297,65 +257,93 @@ public class ServiceClass {
                 if (rowIsValid) {
                     validEmployees.add(employee);
                 }
-
             });
         }
-        // Return true if the error list is empty
-        return validationErrors.isEmpty();
+        return validationErrors;
     }
 
-//    public Workbook generateErrorFile(InputStream file) throws IOException {
-    public void generateErrorFile(InputStream file) throws IOException {
+    public byte[] processUpload(MultipartFile file) throws IOException {
+        byte[] fileBytes = file.getBytes();
+        List<Employee> validEmployees = new ArrayList<>();
 
-        // 1. Re-read the original file uploaded by the user
-        Workbook errorWorkbook;
+        // 1. Validate Headers
+        List<CellError> headerErrors = validateHeaders(new ByteArrayInputStream(fileBytes));
 
-        try {
-            errorWorkbook = WorkbookFactory.create(file);
+        if (!headerErrors.isEmpty()) {
+            return generateErrorFileBytes(new ByteArrayInputStream(fileBytes), headerErrors);
+        }
+
+        // 2. Validate Data (only if headers passed)
+        List<CellError> dataErrors;
+        try (InputStream dataInputStream = new ByteArrayInputStream(fileBytes)) {
+            dataErrors = validateData(dataInputStream, validEmployees);
+        }
+
+        if (dataErrors.isEmpty()) {
+            employeeRepo.saveAll(validEmployees);
+            return null;
+        } else {
+            return generateErrorFileBytes(new ByteArrayInputStream(fileBytes), dataErrors);
+        }
+    }
+
+    public byte[] generateErrorFileBytes(InputStream originalFileInputStream, List<CellError> validationErrors) throws IOException {
+
+        if (validationErrors == null || validationErrors.isEmpty()) {
+            throw new IllegalStateException("No validation errors found to generate error file.");
+        }
+
+        try (Workbook workbook = WorkbookFactory.create(originalFileInputStream);
+             ByteArrayOutputStream bos = new ByteArrayOutputStream()) {
+
+            Sheet sheet = workbook.getSheetAt(0);
+
+            // Styles for Error Highlighting
+            CellStyle headerErrorStyle = workbook.createCellStyle();
+            Font headerErrorFont = workbook.createFont();
+            headerErrorFont.setBold(true);
+            headerErrorFont.setColor(IndexedColors.RED.getIndex());
+            headerErrorStyle.setFont(headerErrorFont);
+
+            CellStyle dataErrorStyle = workbook.createCellStyle();
+            dataErrorStyle.setFillForegroundColor(IndexedColors.RED.getIndex());
+            dataErrorStyle.setFillPattern(FillPatternType.SOLID_FOREGROUND);
+
+            CreationHelper factory = workbook.getCreationHelper();
+
+            // 2. Highlight Errors and Add Comments
+            for (CellError error : validationErrors) {
+                Row errorRow = sheet.getRow(error.getRowIndex());
+
+                if (errorRow != null) {
+                    Cell errorCell = errorRow.getCell(error.getColumnIndex());
+                    if (errorCell == null) {
+                        errorCell = errorRow.createCell(error.getColumnIndex());
+                    }
+
+                    // Apply different styles based on whether it's a header row (row 0) or data row
+                    if (error.getRowIndex() == 0) {
+                        errorCell.setCellStyle(headerErrorStyle);
+                    } else {
+                        errorCell.setCellStyle(dataErrorStyle);
+                    }
+
+                    // Add a comment to the cell
+                    ClientAnchor anchor = factory.createClientAnchor();
+                    Comment comment = sheet.createDrawingPatriarch().createCellComment(anchor);
+                    comment.setString(factory.createRichTextString("Validation Error: " + error.getErrorMessage()));
+                    comment.setAuthor("Validator");
+                    errorCell.setCellComment(comment);
+                }
+            }
+
+            workbook.write(bos);
+            return bos.toByteArray();
 
         } catch (Exception e) {
-
-            // Fallback if file is corrupted, create an empty workbook
-            errorWorkbook = new XSSFWorkbook();
-            Sheet errorSheet = errorWorkbook.createSheet("Error Report");
-            Row headerRow = errorSheet.createRow(0);
-            for(int i = 0; i < EXPECTED_HEADERS.length; i++) {
-                headerRow.createCell(i).setCellValue(EXPECTED_HEADERS[i]);
-            }
-//            return errorWorkbook;
+            e.printStackTrace();
+            throw new IOException("Failed to generate error file.", e);
         }
-
-        Sheet errorSheet = errorWorkbook.getSheetAt(0);
-        Drawing<?> drawing = errorSheet.createDrawingPatriarch();
-
-        // 2. Define Cell Styles for Errors (Red Highlight)
-        CellStyle errorStyle = errorWorkbook.createCellStyle();
-        errorStyle.setFillForegroundColor(IndexedColors.RED.getIndex());
-        errorStyle.setFillPattern(FillPatternType.SOLID_FOREGROUND);
-
-        // 3. Apply Errors to the Sheet
-        for (CellError error : validationErrors) {
-            Row row = errorSheet.getRow(error.rowIndex);
-            if (row == null) continue;
-
-            Cell cell = row.getCell(error.columnIndex);
-            if (cell == null) {
-                cell = row.createCell(error.columnIndex); // Create if null
-            }
-
-            // a. Apply the Red Highlight
-            cell.setCellStyle(errorStyle);
-
-            // b. Add Comments
-            // Create a comment box that spans from column C to D, row 2 to 3
-            ClientAnchor anchor = drawing.createAnchor(0, 0, 0, 0, error.columnIndex + 1, error.rowIndex, error.columnIndex + 3, error.rowIndex + 4);
-            Comment comment = drawing.createCellComment(anchor);
-            comment.setString(errorWorkbook.getCreationHelper().createRichTextString("ERROR: " + error.errorMessage));
-            comment.setAuthor("Data Validator");
-            cell.setCellComment(comment);
-        }
-
-//        return errorWorkbook;
     }
 
     public List<Employee> findAll() {

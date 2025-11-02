@@ -5,6 +5,9 @@ import com.ApachePOI.ExcelTemplate.Service.ServiceClass;
 import jakarta.servlet.http.HttpServletResponse;
 import org.apache.poi.ss.usermodel.*;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.http.HttpHeaders;
+import org.springframework.http.HttpStatus;
+import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -25,13 +28,24 @@ public class ControllerClass {
         service.downloadFile(response);
     }
 
-    @PostMapping(value="/upload", consumes="multipart/form-data")
-    public ResponseEntity<String> uploadData(@RequestParam("file") MultipartFile file) throws IOException {
-        if (file == null || file.isEmpty()) {
-            throw new IllegalArgumentException("Uploaded file is empty or missing!");
+    @PostMapping("/upload")
+    public ResponseEntity<?> uploadData(@RequestParam("file") MultipartFile file) { // Removed HttpServletResponse injection
+        try {
+            byte[] errorFileBytes = service.processUpload(file);
+
+            if (errorFileBytes == null) {
+                return ResponseEntity.ok("File uploaded and data is valid. Employees saved successfully.");
+            } else {
+                HttpHeaders headers = new HttpHeaders();
+                headers.setContentDispositionFormData("attachment", "Error_Template.xlsx");
+                headers.setContentType(MediaType.parseMediaType("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"));
+
+                return new ResponseEntity<>(errorFileBytes, headers, HttpStatus.BAD_REQUEST);
+            }
+        } catch (IOException e) {
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
+                    .body("An error occurred during file processing: " + e.getMessage());
         }
-        service.uploadFile(file.getInputStream());
-        return ResponseEntity.ok("Excel file data uploaded in database.");
     }
 
     @GetMapping("/read-data")

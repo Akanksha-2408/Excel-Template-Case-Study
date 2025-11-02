@@ -10,4 +10,29 @@ public class CellError {
         this.columnIndex = columnIndex;
         this.errorMessage = errorMessage;
     }
+
+    public int getRowIndex() {
+        return rowIndex;
+    }
+
+    public void setRowIndex(int rowIndex) {
+        this.rowIndex = rowIndex;
+    }
+
+    public int getColumnIndex() {
+        return columnIndex;
+    }
+
+    public void setColumnIndex(int columnIndex) {
+        this.columnIndex = columnIndex;
+    }
+
+    public String getErrorMessage() {
+        return errorMessage;
+    }
+
+    public void setErrorMessage(String errorMessage) {
+        this.errorMessage = errorMessage;
+    }
+
 }
